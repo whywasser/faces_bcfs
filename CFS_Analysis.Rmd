@@ -1,0 +1,182 @@
+---
+title: "CFS_Analysis"
+author: "Lina Weingartner"
+date: "2023-05-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load_gh("paul-buerkner/brms","stan-dev/cmdstanr")
+pacman::p_load(tidyverse, rethinking, conflicted, performance)
+```
+
+#scout for conflicts
+```{r}
+# conflict_scout()
+ conflict_prefer("filter", "dplyr")
+ conflict_prefer("ar", "brms")
+conflict_prefer("extract", "rstan")
+conflict_prefer("stan", "rstats")
+conflict_prefer("lag", "dplyr")
+conflict_prefer("extract", "rstan")
+conflict_prefer("map", "purrr")
+conflict_prefer("LOO", "brms")
+conflict_prefer("rstudent", "rethinking")
+conflict_prefer("stancode", "brms")
+conflict_prefer("WAIC", "brms")
+```
+
+loading in the logfiles
+```{r}
+files =  list.files(path = "insert the filepath to your datafiles here", full.names = T)
+data <-  files %>% map_df(~read_csv(.x, col_types = cols(.default = "?", Gender = "c", ID = "f", frameRate = "d", trial = "_", trials.thisRepN = "_", trials.thisTrialN = "_", expName = "_", key_resp_image.rt = "_", before_t = "_", stim_t = "_", total_t = "_", condition = "f")))
+
+#check that they read in correctly
+head(data)
+```
+
+create missing variables
+```{r}
+#index which type of stimulus was used
+data <- data %>% 
+  mutate(stimulus = as.factor(case_when(
+                              grepl("scramble_face", filename) ~ "scrambled",
+                              TRUE ~ "face")
+          ))%>% 
+#shorten important names
+  rename(rt = RT_from_SO.rt, key_response = key_resp_image.keys, order = trials.thisN, index = trials.thisIndex) %>% 
+#index which type of mondrian was used
+  mutate(mondrian = ifelse((index %% 2) == 0, "round", "square"))
+```
+
+z-score transform response time and split data frame
+```{r}
+#remove potential NAs
+data <- na.omit(data)
+data <- data %>% 
+  mutate(rt_cent = scale(rt))%>% 
+  #filter(correct_response==1)
+#save cleaned data
+write.csv(data, "insert path you would like to save the file to")
+data_cfs <- data %>% 
+  filter(condition == "cfs")
+data_nocfs <- data %>% 
+  filter(condition == "nocfs")
+
+```
+
+demographics
+```{r}
+mean(data$Age)
+sd(data$Age)
+```
+
+check modelling assumptions
+```{r}
+round(pastecs::stat.desc(cbind(data_cfs$rt), basic =
+    FALSE, norm = TRUE), digits = 3)
+data_cfs$rt %>% qqnorm (pch = 16, frame = FALSE)
+data_cfs$rt %>% qqline (col = "firebrick", lwd = 3)
+```
+and for noCFS
+```{r}
+round(pastecs::stat.desc(cbind(data_nocfs$rt), basic =
+    FALSE, norm = TRUE), digits = 3)
+data_nocfs$rt %>% qqnorm (pch = 16, frame = FALSE)
+data_nocfs$rt %>% qqline (col = "firebrick", lwd = 3)
+```
+
+compare mean  response time for cfs and nocfs
+```{r}
+data %>% 
+  group_by(condition) %>% 
+  summarise(mean = mean(rt, na.rm = T), sd = sd(rt, na.rm = T))
+```
+
+compare mean response times across a number of variables to see what to include in the model
+```{r}
+data_cfs %>% 
+  group_by(stimulus) %>% 
+  summarise(mean = mean(rt), sd = sd(rt))
+
+data_cfs %>% 
+  group_by(mondrian) %>% 
+  summarise(mean = mean(rt), sd = sd(rt))
+
+data_cfs %>% 
+  group_by(position) %>% 
+  summarise(mean = mean(rt), sd = sd(rt))
+
+data_cfs %>% 
+  group_by(Gender) %>% 
+  summarise(mean = mean(rt), sd = sd(rt))
+
+data_cfs %>% summarise(mean = mean(rt))
+
+```
+define model formula
+```{r}
+f_face <- bf(rt_cent ~ 1 + stimulus + Gender + (1 + stimulus|ID))
+```
+
+set the priors
+```{r}
+get_prior(f_face, data = data_cfs)
+
+h_priors<- c(
+  prior(normal(0, 1), class = Intercept),
+  prior(normal(0, 1), class = sd, coef = Intercept, group = ID),
+  prior(normal(0, 0.3), class = b),
+  prior(normal(0, 1), class = sd, coef = stimulusscrambled, group = ID),
+  prior(normal(1, 0.5), class = sigma),
+  prior(lkj(2), class = cor))
+```
+
+prior predictive check
+```{r}
+m_face_p <- brm(f_face, data = data_cfs, family = gaussian, prior = h_priors, sample_prior = "only")
+
+pp_check(m_face_p)
+```
+
+fit model and posterior predictive check
+```{r}
+m_face <- brm(f_face, data = data_cfs, family = gaussian, prior = h_priors, sample_prior = T)
+
+pp_check(m_face)
+```
+
+```{r}
+summary(m_face)
+```
+```{r}
+plot(conditional_effects(m_face), points=T)
+```
+
+
+
+same procedure for noCFS
+```{r}
+m_face_nocfs <- brm(f_face, data = data_nocfs, family = gaussian, prior = h_priors, sample_prior = "only")
+```
+
+```{r}
+pp_check(m_face_nocfs)
+```
+```{r}
+m_face_nocfs <- brm(f_face, data = data_nocfs, family = gaussian, prior = h_priors, sample_prior = T)
+```
+```{r}
+pp_check(m_face_nocfs)
+
+```
+ 
+
+```{r}
+summary(m_face_nocfs)
+```
+
+```{r}
+plot(conditional_effects(m_face_nocfs), points=T)
+```
